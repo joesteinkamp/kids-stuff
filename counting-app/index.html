@@ -11,8 +11,13 @@
   <main class="app" id="app">
     <!-- Top status / mic indicator -->
     <header class="status-bar">
-      <span class="mic-dot" id="micDot" aria-hidden="true"></span>
-      <span class="status-text" id="statusText">Tap “Start” and say the number!</span>
+      <div class="status-line">
+        <span class="mic-dot" id="micDot" aria-hidden="true"></span>
+        <span class="status-text" id="statusText">Tap “Start” and say the number!</span>
+      </div>
+      <div class="mic-meter" id="micMeter" aria-hidden="true" title="Microphone level">
+        <div class="mic-meter-fill" id="micMeterFill"></div>
+      </div>
     </header>
 
     <!-- Big number in the middle -->

@@ -22,6 +22,7 @@
   const numberDisplay = document.getElementById("numberDisplay");
   const statusText = document.getElementById("statusText");
   const micDot = document.getElementById("micDot");
+  const micMeterFill = document.getElementById("micMeterFill");
   const startOverlay = document.getElementById("startOverlay");
   const startButton = document.getElementById("startButton");
   const supportHint = document.getElementById("supportHint");
@@ -33,17 +34,32 @@
   // ============================================================
   //  Word -> number parsing (0..100)
   // ============================================================
+  // Includes common speech-recognition homophones/mishears so quiet or
+  // slightly-garbled answers still count.
   const ONES = {
-    zero: 0, oh: 0, one: 1, two: 2, to: 2, too: 2, three: 3, four: 4, for: 4,
-    five: 5, six: 6, seven: 7, eight: 8, ate: 8, nine: 9,
+    zero: 0, oh: 0, "o": 0,
+    one: 1, won: 1, wun: 1,
+    two: 2, to: 2, too: 2, tu: 2,
+    three: 3, free: 3, tree: 3, thee: 3,
+    four: 4, for: 4, fore: 4,
+    five: 5, fife: 5, fives: 5,
+    six: 6, sicks: 6, sex: 6,
+    seven: 7, sebben: 7,
+    eight: 8, ate: 8, ait: 8,
+    nine: 9, niner: 9,
   };
   const TEENS = {
-    ten: 10, eleven: 11, twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15,
+    ten: 10, tin: 10, tan: 10,
+    eleven: 11, twelve: 12,
+    thirteen: 13, fourteen: 14, fifteen: 15, fifteens: 15,
     sixteen: 16, seventeen: 17, eighteen: 18, nineteen: 19,
   };
   const TENS = {
-    twenty: 20, thirty: 30, forty: 40, fourty: 40, fifty: 50, sixty: 60,
-    seventy: 70, eighty: 80, ninety: 90,
+    twenty: 20, twenny: 20,
+    thirty: 30, dirty: 30, thirsty: 30,
+    forty: 40, fourty: 40,
+    fifty: 50, fitty: 50,
+    sixty: 60, seventy: 70, eighty: 80, ninety: 90, ninty: 90,
   };
 
   /**
@@ -191,6 +207,7 @@
   }
 
   function handleCorrect() {
+    if (state.celebrating) return;
     playDing();
     flash("correct");
 
@@ -203,18 +220,9 @@
   }
 
   function handleWrong() {
+    if (state.celebrating) return;
     playBuzz();
     flash("wrong");
-  }
-
-  function onHeardNumbers(numbers) {
-    if (state.celebrating || !numbers.length) return;
-    if (numbers.includes(state.current)) {
-      handleCorrect();
-    } else {
-      // Only react with a buzz if they clearly said a (different) number.
-      handleWrong();
-    }
   }
 
   function celebrate() {
@@ -279,7 +287,7 @@
     rec.lang = "en-US";
     rec.continuous = true;
     rec.interimResults = true;
-    rec.maxAlternatives = 3;
+    rec.maxAlternatives = 8;
 
     rec.onstart = () => {
       state.listening = true;
@@ -295,15 +303,21 @@
         for (let a = 0; a < result.length; a++) {
           const nums = extractNumbers(result[a].transcript);
           if (nums.includes(state.current)) {
-            onHeardNumbers([state.current]);
+            handleCorrect();
             matched = true;
             break;
           }
         }
-        // For final results that mentioned a number but not the target, buzz.
+        // Only buzz on a CONFIDENT, clearly-different number in a final result.
+        // Quiet / uncertain / unparseable speech is ignored so it isn't punished.
         if (!matched && result.isFinal) {
-          const nums = extractNumbers(result[0].transcript);
-          if (nums.length) onHeardNumbers(nums);
+          const best = result[0];
+          const nums = extractNumbers(best.transcript);
+          const confidentEnough =
+            typeof best.confidence !== "number" || best.confidence >= 0.6;
+          if (nums.length && confidentEnough && !nums.includes(state.current)) {
+            handleWrong();
+          }
         }
       }
     };
@@ -349,6 +363,78 @@
   }
 
   // ============================================================
+  //  Mic priming + live level meter
+  // ============================================================
+  // The Web Speech recognizer captures audio itself and we can't set its
+  // sensitivity. We open our OWN getUserMedia stream with auto-gain-control on
+  // (and suppression off) to favor quiet voices and to keep the mic "warm", and
+  // we draw a live level meter so it's obvious whether the phone is hearing the
+  // child and how close they need to be.
+  let micStream = null;
+  let analyser = null;
+  const HEARD_THRESHOLD = 0.045; // RMS level we treat as "I hear you"
+
+  function startMicMeter() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
+    navigator.mediaDevices
+      .getUserMedia({
+        audio: {
+          autoGainControl: true,
+          noiseSuppression: false,
+          echoCancellation: false,
+          channelCount: 1,
+        },
+      })
+      .then((stream) => {
+        micStream = stream;
+        const ctx = getAudio();
+        if (!ctx) return;
+        const source = ctx.createMediaStreamSource(stream);
+        analyser = ctx.createAnalyser();
+        analyser.fftSize = 512;
+        analyser.smoothingTimeConstant = 0.6;
+        source.connect(analyser);
+        runMeter();
+      })
+      .catch((err) => {
+        if (err && (err.name === "NotAllowedError" || err.name === "SecurityError")) {
+          wantListening = false;
+          setStatus("🎤 Microphone blocked. Allow mic access and reload.");
+        }
+        // Other errors: recognition may still work; just no meter.
+      });
+  }
+
+  function runMeter() {
+    if (!analyser) return;
+    const buf = new Uint8Array(analyser.fftSize);
+    const tick = () => {
+      if (!analyser) return;
+      analyser.getByteTimeDomainData(buf);
+      // RMS of the centered waveform (0..~1)
+      let sum = 0;
+      for (let i = 0; i < buf.length; i++) {
+        const v = (buf[i] - 128) / 128;
+        sum += v * v;
+      }
+      const rms = Math.sqrt(sum / buf.length);
+      const heard = rms >= HEARD_THRESHOLD;
+
+      if (micMeterFill) {
+        // Scale so normal speech roughly fills the bar; clamp to 100%.
+        const pct = Math.min(100, Math.round((rms / 0.25) * 100));
+        micMeterFill.style.width = pct + "%";
+        micMeterFill.classList.toggle("is-heard", heard);
+      }
+      if (heard && state.listening && !state.celebrating) {
+        setStatus("👂 I hear you… say the number!");
+      }
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  }
+
+  // ============================================================
   //  Boot
   // ============================================================
   function init() {
@@ -369,6 +455,7 @@
       getAudio(); // unlock audio on the user gesture
       startOverlay.hidden = true;
       startOverlay.style.display = "none";
+      startMicMeter(); // prime mic (auto-gain) + live level meter
       startListening();
     });
   }
