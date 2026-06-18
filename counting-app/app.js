@@ -291,6 +291,7 @@
     }
     state.current += step();
     render();
+    saveState();
   }
 
   function handleWrong() {
@@ -310,6 +311,7 @@
       state.current = startValue();
       state.celebrating = false;
       render();
+      saveState();
     }, 2600);
   }
 
@@ -344,6 +346,8 @@
     upButton.setAttribute("aria-pressed", String(up));
     downButton.setAttribute("aria-pressed", String(!up));
     render();
+    saveState();
+    ensureListening(); // re-kick the mic when switching direction
   }
 
   upButton.addEventListener("click", () => setDirection("up"));
@@ -353,7 +357,10 @@
   // child whose voice the recognizer can't catch is never stuck. Voice still
   // works independently.
   numberStage.addEventListener("click", () => {
-    if (state.started) handleCorrect();
+    if (state.started) {
+      handleCorrect();
+      ensureListening();
+    }
   });
 
   // ============================================================
@@ -366,7 +373,10 @@
   function buildRecognition() {
     const rec = new SpeechRecognition();
     rec.lang = "en-US";
-    rec.continuous = true;
+    // Single-utterance mode: the recognizer finalizes short words (like a lone
+    // "nine") faster and more reliably than in continuous mode. We keep it
+    // listening by restarting on `end` and via the watchdog below.
+    rec.continuous = false;
     rec.interimResults = true;
     rec.maxAlternatives = 8;
 
@@ -449,10 +459,99 @@
     }
   }
 
+  // Restart recognition if we want to be listening but the session has died.
+  // Recognizer sessions go stale on their own (and after screen-off / tab
+  // switches); this is the safety net that keeps the mic actually alive.
+  function ensureListening() {
+    if (!wantListening || state.listening) return;
+    if (!recognition) recognition = buildRecognition();
+    try {
+      recognition.start();
+    } catch (_) {
+      // Already starting; ignore InvalidStateError.
+    }
+  }
+
+  // ============================================================
+  //  Keep the screen awake while playing
+  // ============================================================
+  let wakeLock = null;
+  function requestWakeLock() {
+    if (!("wakeLock" in navigator)) return;
+    navigator.wakeLock
+      .request("screen")
+      .then((lock) => {
+        wakeLock = lock;
+        lock.addEventListener("release", () => {
+          wakeLock = null;
+        });
+      })
+      .catch(() => {
+        // Wake lock can be rejected (e.g. low battery); not critical.
+      });
+  }
+
+  // When the page comes back to the foreground (screen unlocked / tab focused),
+  // re-acquire the wake lock and make sure recognition is running again.
+  function onResume() {
+    if (!state.started) return;
+    requestWakeLock();
+    ensureListening();
+  }
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") onResume();
+  });
+  window.addEventListener("focus", onResume);
+
+  // Watchdog: auto-recover a silently-stalled recognizer.
+  setInterval(ensureListening, 3000);
+
   // ============================================================
   //  Boot
   // ============================================================
+  // ============================================================
+  //  Progress persistence (survives reloads)
+  // ============================================================
+  const SAVE_KEY = "kids-counting";
+
+  function saveState() {
+    try {
+      localStorage.setItem(
+        SAVE_KEY,
+        JSON.stringify({ current: state.current, direction: state.direction })
+      );
+    } catch (_) {
+      // Storage may be unavailable (private mode); ignore.
+    }
+  }
+
+  function loadState() {
+    let saved;
+    try {
+      saved = JSON.parse(localStorage.getItem(SAVE_KEY) || "null");
+    } catch (_) {
+      saved = null;
+    }
+    if (!saved) return;
+
+    if (saved.direction === "up" || saved.direction === "down") {
+      state.direction = saved.direction;
+    }
+    const n = Number(saved.current);
+    if (Number.isInteger(n) && n >= MIN && n <= MAX) {
+      state.current = n;
+    }
+
+    // Sync the up/down button styling to the restored direction.
+    const up = state.direction === "up";
+    upButton.classList.toggle("is-active", up);
+    downButton.classList.toggle("is-active", !up);
+    upButton.setAttribute("aria-pressed", String(up));
+    downButton.setAttribute("aria-pressed", String(!up));
+  }
+
   function init() {
+    loadState();
     render();
 
     if (!SpeechRecognition) {
@@ -470,6 +569,7 @@
       getAudio(); // unlock audio on the user gesture
       startOverlay.hidden = true;
       startOverlay.style.display = "none";
+      requestWakeLock(); // keep the screen awake so the mic doesn't die
       // NOTE: deliberately do NOT open a separate getUserMedia stream here.
       // Doing so contends with the Web Speech recognizer for the mic (badly on
       // phones) and degrades recognition. The recognizer gets exclusive access.
