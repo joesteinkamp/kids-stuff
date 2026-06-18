@@ -23,6 +23,7 @@
   const statusText = document.getElementById("statusText");
   const micDot = document.getElementById("micDot");
   const micMeterFill = document.getElementById("micMeterFill");
+  const heardText = document.getElementById("heardText");
   const startOverlay = document.getElementById("startOverlay");
   const startButton = document.getElementById("startButton");
   const supportHint = document.getElementById("supportHint");
@@ -125,6 +126,73 @@
   }
 
   // ============================================================
+  //  Fuzzy / "sounds-like" matching for the current target
+  // ============================================================
+  // Kids' speech is hard for recognizers, so when the exact word isn't
+  // returned we accept a transcript that merely *sounds close* to the target
+  // number. We only ever compare against the single current target, so a
+  // genuinely different number won't be accepted unless it sounds very similar.
+  const ONES_WORDS = ["zero", "one", "two", "three", "four", "five", "six",
+    "seven", "eight", "nine"];
+  const TEEN_WORDS = { 10: "ten", 11: "eleven", 12: "twelve", 13: "thirteen",
+    14: "fourteen", 15: "fifteen", 16: "sixteen", 17: "seventeen",
+    18: "eighteen", 19: "nineteen" };
+  const TENS_WORDS = { 20: "twenty", 30: "thirty", 40: "forty", 50: "fifty",
+    60: "sixty", 70: "seventy", 80: "eighty", 90: "ninety", 100: "hundred" };
+
+  /** Spell an integer 0..100 as its word tokens, e.g. 23 -> ["twenty","three"]. */
+  function numberToWords(n) {
+    if (n <= 9) return [ONES_WORDS[n]];
+    if (n <= 19) return [TEEN_WORDS[n]];
+    if (n === 100) return ["hundred"];
+    const tens = Math.floor(n / 10) * 10;
+    const ones = n % 10;
+    const out = [TENS_WORDS[tens]];
+    if (ones) out.push(ONES_WORDS[ones]);
+    return out;
+  }
+
+  /** Classic Levenshtein edit distance. */
+  function editDistance(a, b) {
+    const m = a.length, n = b.length;
+    if (!m) return n;
+    if (!n) return m;
+    let prev = new Array(n + 1);
+    for (let j = 0; j <= n; j++) prev[j] = j;
+    for (let i = 1; i <= m; i++) {
+      let cur = [i];
+      for (let j = 1; j <= n; j++) {
+        const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+        cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost);
+      }
+      prev = cur;
+    }
+    return prev[n];
+  }
+
+  /** Is recognized word `w` close enough to the expected number word? */
+  function wordSoundsLike(w, target) {
+    if (w === target) return true;
+    const dist = editDistance(w, target);
+    // Allow ~1 edit per 3 letters (min 1) — "seven"/"sevn", "four"/"for".
+    const tolerance = Math.max(1, Math.floor(target.length / 3));
+    return dist <= tolerance;
+  }
+
+  /** Does the transcript sound like the current target number? */
+  function fuzzyHasTarget(text, target) {
+    const targetWords = numberToWords(target);
+    const tokens = text
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, " ")
+      .split(/\s+/)
+      .filter(Boolean);
+    if (!tokens.length) return false;
+    // Every target word must have a near-match somewhere in the tokens.
+    return targetWords.every((tw) => tokens.some((tok) => wordSoundsLike(tok, tw)));
+  }
+
+  // ============================================================
   //  Sound effects (Web Audio API)
   // ============================================================
   let audioCtx = null;
@@ -189,6 +257,12 @@
 
   function setStatus(msg) {
     statusText.textContent = msg;
+  }
+
+  function showHeard(text) {
+    if (!heardText) return;
+    const t = (text || "").trim();
+    heardText.textContent = t ? "heard: “" + t + "”" : "";
   }
 
   // ============================================================
@@ -299,10 +373,16 @@
       // Scan every alternative of the latest results for a number match.
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const result = event.results[i];
+
+        // Surface what the recognizer heard so it can be diagnosed/tuned.
+        showHeard(result[0] && result[0].transcript);
+
         let matched = false;
         for (let a = 0; a < result.length; a++) {
-          const nums = extractNumbers(result[a].transcript);
-          if (nums.includes(state.current)) {
+          const t = result[a].transcript;
+          // Exact parse first, then a "sounds-like" fallback for the target.
+          if (extractNumbers(t).includes(state.current) ||
+              fuzzyHasTarget(t, state.current)) {
             handleCorrect();
             matched = true;
             break;

@@ -78,6 +78,18 @@ body {
   background: var(--correct);
 }
 
+/* Dim line showing what the recognizer last heard (diagnostic for grown-ups) */
+.heard-text {
+  font-size: clamp(0.75rem, 3vw, 0.95rem);
+  opacity: 0.6;
+  min-height: 1.2em;
+  font-style: italic;
+  max-width: 90vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .status-text {
   font-size: clamp(0.95rem, 4.2vw, 1.4rem);
   font-weight: 600;
