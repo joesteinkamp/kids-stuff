@@ -98,8 +98,10 @@ body {
 .number-stage {
   flex: 1 1 auto;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 0.5rem;
   min-height: 0;
   cursor: pointer; /* tap-to-advance backup */
 }
@@ -108,8 +110,18 @@ body {
   transform: scale(0.92);
 }
 
+.say-prompt {
+  font-size: clamp(1.1rem, 5vw, 1.6rem);
+  font-weight: 700;
+  opacity: 0.9;
+  background: rgba(255, 255, 255, 0.16);
+  padding: 0.4rem 1rem;
+  border-radius: 999px;
+  max-width: 90vw;
+}
+
 .number {
-  font-size: min(60vmin, 48vh);
+  font-size: min(55vmin, 40vh);
   line-height: 1;
   font-weight: 800;
   text-shadow: 0 0.06em 0 rgba(0, 0, 0, 0.18);

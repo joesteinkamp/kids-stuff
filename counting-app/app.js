@@ -21,6 +21,7 @@
   const app = document.getElementById("app");
   const numberStage = document.getElementById("numberStage");
   const numberDisplay = document.getElementById("numberDisplay");
+  const sayPrompt = document.getElementById("sayPrompt");
   const statusText = document.getElementById("statusText");
   const micDot = document.getElementById("micDot");
   const heardText = document.getElementById("heardText");
@@ -242,6 +243,11 @@
   // ============================================================
   function render() {
     numberDisplay.textContent = String(state.current);
+    if (sayPrompt) {
+      // Coach a short phrase — the recognizer catches "number nine" far more
+      // reliably than a lone "nine".
+      sayPrompt.textContent = "🗣️ say “number " + state.current + "”";
+    }
   }
 
   function flash(kind) {
@@ -373,10 +379,11 @@
   function buildRecognition() {
     const rec = new SpeechRecognition();
     rec.lang = "en-US";
-    // Single-utterance mode: the recognizer finalizes short words (like a lone
-    // "nine") faster and more reliably than in continuous mode. We keep it
-    // listening by restarting on `end` and via the watchdog below.
-    rec.continuous = false;
+    // Keep ONE long-lived session open (continuous) so words spoken at any
+    // moment are captured. In single-utterance mode the session ends after the
+    // first result, and anything said in the gap before it restarts — including
+    // the second half of a phrase like "ninety-nine" — gets dropped.
+    rec.continuous = true;
     rec.interimResults = true;
     rec.maxAlternatives = 8;
 
