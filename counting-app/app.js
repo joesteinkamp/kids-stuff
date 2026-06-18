@@ -19,10 +19,10 @@
 
   // ---- DOM ----
   const app = document.getElementById("app");
+  const numberStage = document.getElementById("numberStage");
   const numberDisplay = document.getElementById("numberDisplay");
   const statusText = document.getElementById("statusText");
   const micDot = document.getElementById("micDot");
-  const micMeterFill = document.getElementById("micMeterFill");
   const heardText = document.getElementById("heardText");
   const startOverlay = document.getElementById("startOverlay");
   const startButton = document.getElementById("startButton");
@@ -349,6 +349,13 @@
   upButton.addEventListener("click", () => setDirection("up"));
   downButton.addEventListener("click", () => setDirection("down"));
 
+  // Tap-to-advance backup: tapping the big number counts it as correct, so a
+  // child whose voice the recognizer can't catch is never stuck. Voice still
+  // works independently.
+  numberStage.addEventListener("click", () => {
+    if (state.started) handleCorrect();
+  });
+
   // ============================================================
   //  Speech recognition
   // ============================================================
@@ -443,78 +450,6 @@
   }
 
   // ============================================================
-  //  Mic priming + live level meter
-  // ============================================================
-  // The Web Speech recognizer captures audio itself and we can't set its
-  // sensitivity. We open our OWN getUserMedia stream with auto-gain-control on
-  // (and suppression off) to favor quiet voices and to keep the mic "warm", and
-  // we draw a live level meter so it's obvious whether the phone is hearing the
-  // child and how close they need to be.
-  let micStream = null;
-  let analyser = null;
-  const HEARD_THRESHOLD = 0.045; // RMS level we treat as "I hear you"
-
-  function startMicMeter() {
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
-    navigator.mediaDevices
-      .getUserMedia({
-        audio: {
-          autoGainControl: true,
-          noiseSuppression: false,
-          echoCancellation: false,
-          channelCount: 1,
-        },
-      })
-      .then((stream) => {
-        micStream = stream;
-        const ctx = getAudio();
-        if (!ctx) return;
-        const source = ctx.createMediaStreamSource(stream);
-        analyser = ctx.createAnalyser();
-        analyser.fftSize = 512;
-        analyser.smoothingTimeConstant = 0.6;
-        source.connect(analyser);
-        runMeter();
-      })
-      .catch((err) => {
-        if (err && (err.name === "NotAllowedError" || err.name === "SecurityError")) {
-          wantListening = false;
-          setStatus("🎤 Microphone blocked. Allow mic access and reload.");
-        }
-        // Other errors: recognition may still work; just no meter.
-      });
-  }
-
-  function runMeter() {
-    if (!analyser) return;
-    const buf = new Uint8Array(analyser.fftSize);
-    const tick = () => {
-      if (!analyser) return;
-      analyser.getByteTimeDomainData(buf);
-      // RMS of the centered waveform (0..~1)
-      let sum = 0;
-      for (let i = 0; i < buf.length; i++) {
-        const v = (buf[i] - 128) / 128;
-        sum += v * v;
-      }
-      const rms = Math.sqrt(sum / buf.length);
-      const heard = rms >= HEARD_THRESHOLD;
-
-      if (micMeterFill) {
-        // Scale so normal speech roughly fills the bar; clamp to 100%.
-        const pct = Math.min(100, Math.round((rms / 0.25) * 100));
-        micMeterFill.style.width = pct + "%";
-        micMeterFill.classList.toggle("is-heard", heard);
-      }
-      if (heard && state.listening && !state.celebrating) {
-        setStatus("👂 I hear you… say the number!");
-      }
-      requestAnimationFrame(tick);
-    };
-    requestAnimationFrame(tick);
-  }
-
-  // ============================================================
   //  Boot
   // ============================================================
   function init() {
@@ -535,7 +470,9 @@
       getAudio(); // unlock audio on the user gesture
       startOverlay.hidden = true;
       startOverlay.style.display = "none";
-      startMicMeter(); // prime mic (auto-gain) + live level meter
+      // NOTE: deliberately do NOT open a separate getUserMedia stream here.
+      // Doing so contends with the Web Speech recognizer for the mic (badly on
+      // phones) and degrades recognition. The recognizer gets exclusive access.
       startListening();
     });
   }
